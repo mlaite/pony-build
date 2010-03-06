@@ -87,26 +87,34 @@ def _run_command(command_list, timeout=None, cwd=None, variables=None, extra_kwa
         print 'default kwargs:', default_kwargs
 
     try:
-        # get start time
         start_time = datetime.time.now()
+        print 'start time: ', start_time
         p = subprocess.Popen(command_list, cwd=cwd, **default_kwargs)
         while p.poll() is None:
-            # temp suspend execution for .1 second,
-            # i like .1 seconds.
-            time.sleep(0.1)
-            # get current time
+            print 'inside while'
+            time.sleep(timeout)
             current_time = datetime.time.now()
-            # if the amount of seconds between start and current are greater
-            # then passed timeout kill p...
+            print 'current time: ', current_time
             if (current_time - start_time).seconds > timeout:
-                # send kill signal to the process
-                os.kill(p.pid, signal.SIGKILL)
-                # wait for the kill to happen before carrying on
-                os.waitpid(-1, os.WNOHANG)
-                return None
+                print 'inside if to kill process'
+                try:
+                    # windows kill....hopefully
+                    import ctypes
+                    import win32
+                    PROCESS_TERMINATE = 1
+                    handle = ctypes.windll.kernel32.OpenProcess(PROCESS_TERMINATE, False, p.pid)
+                    ctypes.windll.kernel32.TerminateProcess(handle, -1)
+                    ctypes.windll.kernel32.CloseHandle(handle)
+                except ImportError:
+                    # unix kill....hopefully
+                    os.kill(p.pid, signal.SIGKILL)
+                    # wait for the kill to happen before carrying on
+                    os.waitpid(-1, os.WNOHANG)
+                    out, err = p.communicate()
+                    ret = p.returncode
 
-        out, err = p.communicate()
-        ret = p.returncode
+            out, err = p.communicate()
+            ret = p.returncode
     except:
         out = ''
         err = traceback.format_exc()
