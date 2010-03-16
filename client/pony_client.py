@@ -73,9 +73,10 @@ def create_cache_dir(cache_dir, dirname):
     # @CTB can't we use os.path.split here, instead?
     # @CTB refactor create_cache_dir to check to see if it exists, maybe?
     
-    pkglen = len(dirname) 
-    cache_dir = cache_dir[:-pkglen]
-    
+    # pkglen = len(dirname) 
+    # cache_dir = cache_dir[:-pkglen]
+    cache_dir = os.path.dirname(cache_dir)
+
     if os.path.isdir(cache_dir):
         log_info('VCS cache_dir %s exists already!' % cache_dir)
     else:
