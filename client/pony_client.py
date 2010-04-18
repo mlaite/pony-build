@@ -21,10 +21,11 @@ import datetime
 import signal
 
 pb_servers = {
-    'pb-dev' : 'http://lyorn.idyll.org/ctb/pb-dev/xmlrpc',
-    'local' : 'http://localhost:8000/xmlrpc'
+    'pb-dev' : 'http://lyorn.idyll.org/ctb/pb-dev/',
+    'local' : 'http://localhost:8000/'
     }
 pb_servers['default'] = pb_servers['pb-dev']
+
 
 ###
 
@@ -208,7 +209,7 @@ class VirtualenvContext(Context):
     VirtualenvContext works by modifying the path to the Python executable.
     """
     def __init__(self, always_cleanup=True, dependencies=[], optional=[],
-                 python='python'):
+                 python='python', include_site_packages=False):
         Context.__init__(self)
         self.cleanup = always_cleanup
         self.dependencies = dependencies
@@ -221,9 +222,14 @@ class VirtualenvContext(Context):
 
         self.tempdir = tempfile.mkdtemp()
 
-        log_inf('creating virtualenv')
-        cmdlist = [python, '-m', 'virtualenv', '--no-site-packages',
-                   self.tempdir]
+        log_info('creating virtualenv')
+
+        cmdlist = list([python, '-m', 'virtualenv'])
+        if not include_site_packages:
+            cmdlist.append('--no-site-packages')
+
+        cmdlist.append(self.tempdir)
+
         (ret, out, err) = _run_command(cmdlist)
 
         if ret != 0:
@@ -237,9 +243,11 @@ class VirtualenvContext(Context):
         self.pip = os.path.join(bindir, 'pip')
 
         os.environ['PATH'] = bindir + os.pathsep + os.environ['PATH']
+        log_debug("modified PATH to include virtualenv bindir: '%s'" % bindir)
 
     def initialize(self):
         Context.initialize(self)
+        
         log_info('changing to temp directory:', self.tempdir)
         
         self.cwd = os.getcwd()
@@ -383,6 +391,33 @@ class BuildCommand(BaseCommand):
 class TestCommand(BaseCommand):
     command_type = 'test'
     command_name = 'test'
+
+class CopyLocalDir(BuildCommand):
+    def __init__(self, fromdir, to_name):
+        self.ignore_failure = False
+        self.fromdir = fromdir
+        self.to_name = to_name
+        self.results_dict = dict(fromdir=fromdir, to_name=to_name)
+        
+    def run(self, context):
+        self.results_dict['out'] = self.results_dict['errout'] = ''
+
+        try:
+            shutil.copytree(self.fromdir, self.to_name)
+            context.build_dir = os.path.join(os.getcwd(), 'Caper')
+            self.status = 0
+        except Exception, e:
+            self.errout = str(e)
+            self.status = 1
+
+    def get_results(self):
+        self.results_dict['status'] = self.status
+        self.results_dict['type'] = self.command_type
+        self.results_dict['name'] = self.command_name
+
+        return self.results_dict
+            
+
 
 class PythonPackageEgg(BaseCommand):
     command_type = 'package'
@@ -595,7 +630,7 @@ class HgClone(_VersionControlClientBase):
         path = p[2]                     # urlparse -> path
 
         dirname = path.rstrip('/').split('/')[-1]
-        log_info('git checkout dirname guessed as: %s' % (dirname,))
+        log_info('hg checkout dirname guessed as: %s' % (dirname,))
         return dirname
 
     def update_repository(self):
@@ -629,7 +664,12 @@ class HgClone(_VersionControlClientBase):
             cwd = os.getcwd()
             raise Exception("cannot clone repository %s in %s" % (url, cwd))
 
-        # @CTB branch stuff unimplemented
+        if self.branch != 'default':
+            # update to the right branch
+            branchspec = '%s:%s' % (self.branch, self.branch)
+            cmdlist = ['hg', 'update', branchspec]
+            (ret, out, err) = _run_command(cmdlist, dirname)
+            assert ret == 0, (out, err)
             
     def record_repository_info(self, repo_dir):
         # get some info on what our HEAD is
@@ -664,7 +704,10 @@ class SvnCheckout(_VersionControlClientBase):
         return self.dirname
 
     def update_repository(self):
-        cmdlist = ['svn', 'update', '--accept', 'theirs-full']
+        # adding '--accept', 'theirs-full' is a good idea for newer versions
+        # of svn; this automatically accepts dodgy security certs.
+        cmdlist = ['svn', 'update']
+        
         (ret, out, err) = _run_command(cmdlist)
 
         self.results_dict['svn update'] = dict(status=ret, output=out,
@@ -751,10 +794,10 @@ def _upload_file(server_url, fileobj, auth_key):
 
 def do(name, commands, context=None, arch=None, stop_if_failure=True):
     reslist = []
-
+    
     if context:
         context.initialize()
-
+        
     for c in commands:
         log_debug('running:', str(c))
         if context:
@@ -764,7 +807,7 @@ def do(name, commands, context=None, arch=None, stop_if_failure=True):
             context.end_command(c)
 
         reslist.append(c.get_results())
-
+        
         if stop_if_failure and not c.success():
             break
 
@@ -810,6 +853,8 @@ def send(server_url, x, hostname=None, tags=()):
             _upload_file(server_url, fileobj, auth_key)
 
 def check(name, server_url, tags=(), hostname=None, arch=None, reserve_time=0):
+    import socket
+    
     if hostname is None:
         hostname = get_hostname()
 
@@ -819,16 +864,21 @@ def check(name, server_url, tags=(), hostname=None, arch=None, reserve_time=0):
     client_info = dict(package=name, host=hostname, arch=arch, tags=tags)
     server_url = get_server_url(server_url)
     s = xmlrpclib.ServerProxy(server_url, allow_none=True)
-    (flag, reason) = s.check_should_build(client_info, True, reserve_time)
+    try:
+        (flag, reason) = s.check_should_build(client_info, True, reserve_time)
+    except socket.error:
+        log_critical('cannot connect to pony-build server: %s' % server_url)
+        sys.exit(-1)
+        
     return flag
 
 def get_server_url(server_name):
     try_url = urlparse.urlparse(server_name)
     if try_url[0]:                      # urlparse -> scheme
-        server_url = server_name
+        server_url = urlparse.urljoin(server_name, 'xmlrpc')
     else: # not a URL?
-        server_url = pb_servers[server_name]
-
+        server_temp = pb_servers[server_name]
+        server_url = urlparse.urljoin(server_temp, 'xmlrpc')
     return server_url
 
 def get_tagsets_for_package(server, package):
@@ -853,12 +903,16 @@ def parse_cmdline(argv=[]):
                        help='do not clean up the temp directory')
 
     cmdline.add_option('-s', '--server-url', dest='server_url',
-                       action='store', default='default',
+                       action='store', default='pb-dev',
                        help='set pony-build server URL for reporting results')
 
     cmdline.add_option('-v', '--verbose', dest='verbose',
                        action='store_true', default=False,
                        help='set verbose reporting')
+                       
+    cmdline.add_option('--debug', dest='debug',
+                       action='store_true', default=False,
+                       help='set debug reporting')
                        
     cmdline.add_option('-e', '--python-executable', dest='python_executable',
                        action='store', default='python',
@@ -879,22 +933,46 @@ def parse_cmdline(argv=[]):
         
     # there should be nothing in args.
     # if there is, print a warning, then crash and burn.
-    if args:
-        print "Error--unknown arguments detected.  Failing..."
-        sys.exit(0)
+    #if args:
+    #    print "Error--unknown arguments detected.  Failing..."
+    #    sys.exit(0)
+
+    if options.verbose:
+        set_log_level(INFO_LEVEL)
+
+    if options.debug:
+        set_log_level(DEBUG_LEVEL)
+
+    if not options.report:
+        options.force_build = True
 
     return options, args
 
 
 ###
 
+class PythonVersionNotFound(Exception):
+    def __init__(self, python_exe):
+        self.python_exe = python_exe
+    def __str__(self):
+        return repr(self.python_exe + " not found on system.")
 
-def test_python_version(python_exe):
-    result = subprocess.Popen(python_exe + " -c \"print 'hello, world'\"", shell=True, \
-                    stdout=subprocess.PIPE).communicate()
-    if result[0] != "hello, world\n":
-        return False
-    return True
+
+def get_python_version(python_exe='python'):
+    """
+    Return the major.minor number for the given Python executable.
+    """
+    
+    cmd = python_exe + " -c \"import sys \nprint" \
+    " str(sys.version_info[0]) + '.' + str(sys.version_info[1])\""
+    
+    p = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE)
+    (stdout, stderr) = p.communicate()
+    
+    if not stdout:
+        raise PythonVersionNotFound(python_exe)
+    
+    return stdout.strip()
 
 ###
 

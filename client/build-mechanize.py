@@ -2,19 +2,20 @@
 import sys
 import pprint
 from pony_client import BuildCommand, TestCommand, do, send, \
-     TempDirectoryContext, SetupCommand, GitClone, check, parse_cmdline, \
-     PythonPackageEgg, get_python_version
+     TempDirectoryContext, SetupCommand, SvnCheckout, check, parse_cmdline
 
-options, _ = parse_cmdline()
+options, args = parse_cmdline()
+if args:
+    print 'ignoring command line args: ', args
 
-python_exe = options.python_executable
+repo_url = 'http://wwwsearch.sourceforge.net/mechanize/src/mechanize-0.1.11.tar.gz'
 
-repo_url = 'git://quixote.ca/quixote'
+python_exe = 'python'
+if args:
+    python_exe = args[0]
 
-python_ver = 'python' + get_python_version(python_exe)
-tags = [python_ver] + options.tagset
-name = 'quixote'
-
+name = 'mechanize'
+tags = ['mechanize']
 server_url = options.server_url
 
 if not options.force_build:
@@ -22,10 +23,11 @@ if not options.force_build:
         print 'check build says no need to build; bye'
         sys.exit(0)
 
-context = TempDirectoryContext()
-commands = [ GitClone(repo_url, name='checkout'),
-             BuildCommand([python_exe, 'setup.py', 'install'], name='compile')]
+commands = [ SvnCheckout('mechanize', repo_url, name='checkout'),
+             BuildCommand([python_exe, 'setup.py', 'test'])
+             ]
 
+context = TempDirectoryContext()
 results = do(name, commands, context=context)
 client_info, reslist, files = results
 
