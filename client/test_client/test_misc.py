@@ -36,7 +36,7 @@ def test_create_cache_dir():
     _old_mkdir, os.mkdir = os.mkdir, noop
 
     try:
-        pony_client.create_cache_dir(fake_pkg, 'SOME_PACKAGE')
+        pony_client.create_cache_dir(fake_pkg)
         # here, the 'noop' function is actually doing the test.
     finally:
         # put stdlib functions back
