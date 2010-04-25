@@ -792,33 +792,36 @@ def _upload_file(server_url, fileobj, auth_key):
 
 def do(name, commands, context=None, arch=None, stop_if_failure=True):
     reslist = []
-    init_status = True
-    
-    if context:
-        try:
-            context.initialize()
-        except:
-            init_status = False
+    initialized = True
 
-    if init_status:
+    if context is None:
+        context = Context()
+    
+    try:
+        context.initialize()
+    except:
+        log_critical('%s failed to initialize properly!' % context)
+        initialized = False
+
+    if initialized:
         for c in commands:
             log_debug('running:', str(c))
-            if context:
-                context.start_command(c)
+            context.start_command(c)
             try:
                 c.run(context)
             except:
-                break
-            if context:
+                reslist.append(c.get_results())
                 context.end_command(c)
+                log_warning('The %s command failed to run properly!' % c)
+                break
+            context.end_command(c)
 
             reslist.append(c.get_results())
         
             if stop_if_failure and not c.success():
                 break
 
-    if context:
-        context.finish()
+    context.finish()
 
     if arch is None:
         arch = get_arch()
@@ -829,14 +832,13 @@ def do(name, commands, context=None, arch=None, stop_if_failure=True):
             success = False
             break
 
-    client_info = dict(package=name, arch=arch, success=success)
+    client_info = dict(package=name, arch=arch, success=success, 
+                       initialized=initialized)
     files_to_upload = None
 
-    if context:
-        context.update_client_info(client_info)
+    context.update_client_info(client_info)
 
-        if context.files:
-            files_to_upload = context.files
+    files_to_upload = context.files
 
     return (client_info, reslist, files_to_upload)
 
