@@ -810,17 +810,12 @@ def do(name, commands, context=None, arch=None, stop_if_failure=True):
             try:
                 c.run(context)
             except:
-                reslist.append(c.get_results())
-                context.end_command(c)
                 log_warning('The %s command failed to run properly!' % c)
                 break
-            context.end_command(c)
-
-            reslist.append(c.get_results())
+            finally:
+                context.end_command(c)
+                reslist.append(c.get_results())
         
-            if stop_if_failure and not c.success():
-                break
-
     context.finish()
 
     if arch is None:
